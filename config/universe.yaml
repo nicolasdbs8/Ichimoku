@@ -1,1 +1,13 @@
-
+symbols:
+  - { symbol: BTC/USDT, enabled: true, is_btc: true }
+  - { symbol: ETH/USDT, enabled: true, is_btc: false }
+  - { symbol: SOL/USDT, enabled: true, is_btc: false }
+  - { symbol: XRP/USDT, enabled: true, is_btc: false }
+  - { symbol: ADA/USDT, enabled: true, is_btc: false }
+  - { symbol: AVAX/USDT, enabled: true, is_btc: false }
+  - { symbol: LINK/USDT, enabled: true, is_btc: false }
+  - { symbol: DOT/USDT, enabled: true, is_btc: false }
+  - { symbol: DOGE/USDT, enabled: true, is_btc: false }
+  - { symbol: MATIC/USDT, enabled: true, is_btc: false }
+  - { symbol: LTC/USDT, enabled: true, is_btc: false }
+  - { symbol: BCH/USDT, enabled: true, is_btc: false }
