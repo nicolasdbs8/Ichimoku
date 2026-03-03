@@ -1,1 +1,42 @@
+env: paper
 
+exchange:
+  name: kraken
+  enable_rate_limit: true
+
+scan:
+  interval_seconds: 60
+  timezone: UTC
+
+timeframes:
+  signal: 15m
+  trend: 1h
+  regime: 4h
+
+ichimoku:
+  tenkan: 9
+  kijun: 26
+  spanb: 52
+  displacement: 26
+
+setup_a_plus:
+  score_threshold: 80
+  retest_window_bars: 12
+  retest_eps: 0.0015
+  kijun_slope_bars: 10
+  max_kijun_distance_pct: 0.008
+  min_kumo_thickness_pct: 0.0035
+
+risk:
+  atr_period: 14
+  stop_atr_mult: 0.5
+
+costs:
+  fee_rate: 0.001
+  slippage_rate: 0.0005
+
+dedup:
+  cooldown_bars: 12
+
+telegram:
+  enabled: true
