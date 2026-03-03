@@ -48,12 +48,27 @@ jobs:
           run-id: ${{ inputs.fetch_run_id }}
           name: ${{ inputs.cache_artifact_name }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: .
+          path: _artifact
 
-      - name: Debug cache presence
+      - name: Restore cache into repo data/cache
+        shell: bash
         run: |
-          ls -la data || true
-          ls -la data/cache || true
+          mkdir -p data/cache
+          echo "[restore] listing _artifact:"
+          find _artifact -maxdepth 4 -type f | head -n 50 || true
+
+          # Find the expected cache file anywhere in the artifact
+          SRC=$(find _artifact -type f -name "BTC_USDT__15m.csv" | head -n 1 || true)
+          if [ -z "$SRC" ]; then
+            echo "##ERROR## BTC_USDT__15m.csv not found inside artifact"
+            echo "Artifact contents:"
+            find _artifact -type f | head -n 200 || true
+            exit 1
+          fi
+
+          cp "$SRC" data/cache/BTC_USDT__15m.csv
+          echo "[restore] copied $SRC -> data/cache/BTC_USDT__15m.csv"
+          ls -la data/cache
 
       - name: Run diagnose
         run: |
