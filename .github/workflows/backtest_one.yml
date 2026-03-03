@@ -1,20 +1,24 @@
-name: Backtest One Symbol
+name: Backtest One Symbol - From Cache Artifact
 
 on:
   workflow_dispatch:
     inputs:
+      cache_artifact:
+        description: "Artifact name produced by fetch_full_history (e.g. cache_BTCUSDT_15m)"
+        required: true
+        default: "cache_BTCUSDT_15m"
       symbol:
         description: "Symbol (e.g. BTC/USDT)"
         required: true
         default: "BTC/USDT"
       start:
-        description: "Start ISO UTC (e.g. 2025-01-01T00:00:00Z) or empty"
-        required: false
-        default: ""
+        description: "Start ISO UTC"
+        required: true
+        default: "2025-01-01T00:00:00Z"
       end:
-        description: "End ISO UTC (e.g. 2026-01-01T00:00:00Z) or empty"
-        required: false
-        default: ""
+        description: "End ISO UTC"
+        required: true
+        default: "2026-01-01T00:00:00Z"
       out:
         description: "Output directory"
         required: true
@@ -36,21 +40,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scan_once to populate cache
-        # Important: cache in GitHub Actions is ephemeral per run, so we fetch first.
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python -m runner.scan_once
+      - name: Download cache artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.cache_artifact }}
+          path: .
 
       - name: Run backtest
         run: |
-          CMD="python -m runner.backtest_one --symbol '${{ inputs.symbol }}' --out '${{ inputs.out }}'"
-          if [ -n "${{ inputs.start }}" ]; then CMD="$CMD --start '${{ inputs.start }}'"; fi
-          if [ -n "${{ inputs.end }}" ]; then CMD="$CMD --end '${{ inputs.end }}'"; fi
-          echo "$CMD"
-          eval $CMD
+          python -m runner.backtest_one --symbol "${{ inputs.symbol }}" --start "${{ inputs.start }}" --end "${{ inputs.end }}" --out "${{ inputs.out }}"
 
       - name: Upload artifacts (trades + summary)
         uses: actions/upload-artifact@v4
