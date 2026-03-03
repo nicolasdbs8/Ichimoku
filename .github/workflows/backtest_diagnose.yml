@@ -1,15 +1,19 @@
-name: Backtest Diagnose (BTC)
+name: Backtest Diagnose (BTC) - From Cache Artifact
 
 on:
   workflow_dispatch:
     inputs:
+      cache_artifact:
+        description: "Artifact name produced by fetch_full_history (e.g. cache_BTCUSDT_15m)"
+        required: true
+        default: "cache_BTCUSDT_15m"
       start:
-        description: "Start ISO UTC (e.g. 2025-01-01T00:00:00Z) or empty"
-        required: false
+        description: "Start ISO UTC"
+        required: true
         default: "2025-01-01T00:00:00Z"
       end:
-        description: "End ISO UTC (e.g. 2026-01-01T00:00:00Z) or empty"
-        required: false
+        description: "End ISO UTC"
+        required: true
         default: "2026-01-01T00:00:00Z"
       out:
         description: "Output directory"
@@ -32,22 +36,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scan_once to populate cache (ephemeral runner)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python -m runner.scan_once
+      - name: Download cache artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.cache_artifact }}
+          path: .
 
-      - name: Run diagnose
+      - name: Run diagnose (uses cache file in data/cache/)
         run: |
-          CMD="python -m runner.backtest_diagnose --out '${{ inputs.out }}'"
-          if [ -n "${{ inputs.start }}" ]; then CMD="$CMD --start '${{ inputs.start }}'"; fi
-          if [ -n "${{ inputs.end }}" ]; then CMD="$CMD --end '${{ inputs.end }}'"; fi
-          echo "$CMD"
-          eval $CMD
+          python -m runner.backtest_diagnose --start "${{ inputs.start }}" --end "${{ inputs.end }}" --out "${{ inputs.out }}"
 
-      - name: Upload artifact
+      - name: Upload diagnose artifact
         uses: actions/upload-artifact@v4
         with:
           name: diagnose_artifacts
