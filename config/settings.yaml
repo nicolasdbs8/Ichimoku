@@ -29,7 +29,7 @@ setup_a_plus:
 
 risk:
   atr_period: 14
-  stop_atr_mult: 1.2
+  stop_atr_mult: 2.0
 
 costs:
   fee_rate: 0.001
@@ -46,4 +46,4 @@ backtest:
   slippage_rate: 0.0005
   risk_per_trade: 0.01
   atr_period: 14
-  atr_stop_mult: 2.0
+  atr_stop_mult: 1.2
