@@ -15,7 +15,7 @@ from data.resample import resample_from_15m  # we will use for 15m->1h/4h
 
 from signals.regime import btc_regime_on
 from signals.trend import trend_on_1h
-from signals.ichimoku_a_plus import APlusConfig, compute_score, should_entry, should_exit
+from signals.ichimoku_a_plus import APlusConfig
 from backtest.engine_one import run_backtest_one  # your existing engine that writes trades/summary
 
 
