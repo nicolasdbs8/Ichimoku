@@ -47,7 +47,10 @@ def detect_missing_candles(df: pd.DataFrame, timeframe: str) -> MissingReport:
 
 def resample_from_15m(df15: pd.DataFrame, target_tf: str) -> pd.DataFrame:
     """
-    Build 1h / 4h candles from 15m. Assumes df15 is 15m, UTC, close times aligned.
+    Build 1h / 4h candles from 15m. We ONLY keep fully complete buckets:
+    - 1h requires 4 x 15m
+    - 4h requires 16 x 15m
+
     Resample uses:
     open=first, high=max, low=min, close=last, volume=sum.
     """
@@ -55,13 +58,14 @@ def resample_from_15m(df15: pd.DataFrame, target_tf: str) -> pd.DataFrame:
     if df15.empty:
         return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
-    # set index
-    dfi = df15.set_index("ts")
-
     target_tf = target_tf.lower()
     rule = {"1h": "1h", "4h": "4h"}.get(target_tf)
     if rule is None:
         raise ValueError(f"Unsupported resample target: {target_tf}")
+
+    required_counts = {"1h": 4, "4h": 16}[target_tf]
+
+    dfi = df15.set_index("ts")
 
     agg = {
         "open": "first",
@@ -71,9 +75,15 @@ def resample_from_15m(df15: pd.DataFrame, target_tf: str) -> pd.DataFrame:
         "volume": "sum",
     }
 
-    out = dfi.resample(rule, label="right", closed="right").agg(agg).dropna().reset_index()
-    # label="right" means timestamps at candle end boundary, consistent for "last closed"
-    out = out.rename(columns={"ts": "ts"})
+    grouped = dfi.resample(rule, label="right", closed="right")
+
+    out = grouped.agg(agg)
+    counts = grouped["close"].count()  # number of 15m candles in each bucket
+
+    # Keep only fully complete buckets
+    out = out[counts == required_counts]
+
+    out = out.dropna().reset_index()
     out = out[["ts", "open", "high", "low", "close", "volume"]]
     out["ts"] = pd.to_datetime(out["ts"], utc=True)
     return out
