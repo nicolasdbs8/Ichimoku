@@ -16,7 +16,37 @@ from data.resample import resample_from_15m  # we will use for 15m->1h/4h
 from signals.regime import btc_regime_on
 from signals.trend import trend_on_1h
 from signals.ichimoku_a_plus import APlusConfig
-from backtest.engine_one import run_backtest_one  # your existing engine that writes trades/summary
+
+# --- Locate run_backtest_one in your backtest package without guessing the file name ---
+run_backtest_one = None
+
+_IMPORT_CANDIDATES = [
+    "backtest.engine_one",
+    "backtest.engine",
+    "backtest.one",
+    "backtest.one_symbol",
+    "backtest.backtest_one",
+    "backtest.runner",
+    "backtest.core",
+]
+
+for mod in _IMPORT_CANDIDATES:
+    try:
+        m = __import__(mod, fromlist=["run_backtest_one"])
+        run_backtest_one = getattr(m, "run_backtest_one", None)
+        if callable(run_backtest_one):
+            break
+    except Exception:
+        continue
+
+if not callable(run_backtest_one):
+    raise ImportError(
+        "Could not import a callable run_backtest_one from backtest/. "
+        "Fix by exposing run_backtest_one in one of these modules: "
+        + ", ".join(_IMPORT_CANDIDATES)
+        + ". Tip: search in the repo for `def run_backtest_one` and add it to backtest/__init__.py or adjust the import."
+    )
+# --- end ---
 
 
 def load_yaml(path: Path) -> dict:
