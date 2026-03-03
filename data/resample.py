@@ -58,7 +58,8 @@ def resample_from_15m(df15: pd.DataFrame, target_tf: str) -> pd.DataFrame:
     # set index
     dfi = df15.set_index("ts")
 
-    rule = {"1h": "1H", "4h": "4H"}.get(target_tf)
+    target_tf = target_tf.lower()
+    rule = {"1h": "1h", "4h": "4h"}.get(target_tf)
     if rule is None:
         raise ValueError(f"Unsupported resample target: {target_tf}")
 
