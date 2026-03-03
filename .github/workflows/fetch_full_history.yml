@@ -1,8 +1,12 @@
-name: Fetch Full History (Cache)
+name: Fetch Full History (Cache) - Binance Public Data
 
 on:
   workflow_dispatch:
     inputs:
+      market:
+        description: "Binance public data market: spot or futures_um"
+        required: true
+        default: "spot"
       symbol:
         description: "Symbol (e.g. BTC/USDT)"
         required: true
@@ -16,13 +20,9 @@ on:
         required: true
         default: "2025-01-01T00:00:00Z"
       end:
-        description: "End ISO UTC (optional, empty = fetch to latest)"
-        required: false
-        default: "2026-01-01T00:00:00Z"
-      limit:
-        description: "ccxt limit per call"
+        description: "End ISO UTC (e.g. 2026-01-01T00:00:00Z)"
         required: true
-        default: "1000"
+        default: "2026-01-01T00:00:00Z"
 
 jobs:
   fetch:
@@ -40,19 +40,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Fetch history into cache
+      - name: Build cache CSV from Binance public data
         run: |
-          CMD="python -m runner.fetch_history --symbol '${{ inputs.symbol }}' --timeframe '${{ inputs.timeframe }}' --start '${{ inputs.start }}' --limit ${{ inputs.limit }}"
-          if [ -n "${{ inputs.end }}" ]; then CMD="$CMD --end '${{ inputs.end }}'"; fi
-          echo "$CMD"
-          eval $CMD
+          # Cache naming must match your existing cache_path convention: BTC_USDT__15m.csv
+          SYM="${{ inputs.symbol }}"
+          SYM_FILE="${SYM//\//_}"
+          OUT="data/cache/${SYM_FILE}__${{ inputs.timeframe }}.csv"
+          python -m runner.fetch_history_binance_vision \
+            --market "${{ inputs.market }}" \
+            --symbol "${{ inputs.symbol }}" \
+            --timeframe "${{ inputs.timeframe }}" \
+            --start "${{ inputs.start }}" \
+            --end "${{ inputs.end }}" \
+            --out_csv "$OUT"
 
       - name: Sanitize symbol for artifact name
         id: sanitize
         shell: bash
         run: |
           SYM="${{ inputs.symbol }}"
-          # remove characters that break artifact names
           SYM_CLEAN="${SYM//\//}"
           SYM_CLEAN="${SYM_CLEAN//:/}"
           echo "symbol_clean=$SYM_CLEAN" >> "$GITHUB_OUTPUT"
