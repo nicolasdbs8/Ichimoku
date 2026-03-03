@@ -1,7 +1,7 @@
 env: paper
 
 exchange:
-  name: kraken
+  name: binance
   enable_rate_limit: true
 
 scan:
