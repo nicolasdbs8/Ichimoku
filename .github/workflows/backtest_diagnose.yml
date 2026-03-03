@@ -6,6 +6,10 @@ on:
       fetch_run_id:
         description: "Run ID of the successful Fetch Full History workflow (number)"
         required: true
+      cache_artifact_name:
+        description: "Artifact name (e.g. cache_BTCUSDT_15m)"
+        required: true
+        default: "cache_BTCUSDT_15m"
       start:
         description: "Start ISO UTC"
         required: true
@@ -38,14 +42,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Download ALL artifacts from fetch run
+      - name: Download cache artifact from fetch run
         uses: actions/download-artifact@v4
         with:
           run-id: ${{ inputs.fetch_run_id }}
+          name: ${{ inputs.cache_artifact_name }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: .
 
-      - name: Run diagnose (uses data/cache/*.csv)
+      - name: Debug cache presence
+        run: |
+          ls -la data || true
+          ls -la data/cache || true
+
+      - name: Run diagnose
         run: |
           python -m runner.backtest_diagnose --start "${{ inputs.start }}" --end "${{ inputs.end }}" --out "${{ inputs.out }}"
 
