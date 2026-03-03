@@ -18,11 +18,11 @@ on:
       end:
         description: "End ISO UTC (optional, empty = fetch to latest)"
         required: false
-        default: ""
+        default: "2026-01-01T00:00:00Z"
       limit:
         description: "ccxt limit per call"
         required: true
-        default: "500"
+        default: "1000"
 
 jobs:
   fetch:
