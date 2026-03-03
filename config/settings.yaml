@@ -20,7 +20,7 @@ ichimoku:
   displacement: 26
 
 setup_a_plus:
-  score_threshold: 80
+  score_threshold: 90
   retest_window_bars: 12
   retest_eps: 0.0015
   kijun_slope_bars: 10
@@ -46,4 +46,4 @@ backtest:
   slippage_rate: 0.0005
   risk_per_trade: 0.01
   atr_period: 14
-  atr_stop_mult: 1.2
+  atr_stop_mult: 2.0
