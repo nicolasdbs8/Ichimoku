@@ -11,6 +11,15 @@ from data.fetch_ohlcv import make_exchange, fetch_ohlcv_incremental
 from data.store import ensure_cache_dir, cache_path, load_cache_csv, save_cache_csv
 from data.resample import detect_missing_candles, build_multitf, compute_freshness
 
+def json_safe(obj):
+    import pandas as pd
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [json_safe(v) for v in obj]
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    return obj
 
 def load_yaml(path: Path) -> dict:
     if not path.exists():
@@ -108,7 +117,7 @@ def main() -> None:
         ],
     }
 
-    print("[scan_once] data_health=" + json.dumps(health, ensure_ascii=False))
+    print("[scan_once] data_health=" + json.dumps(json_safe(health), ensure_ascii=False))
 
 
 if __name__ == "__main__":
