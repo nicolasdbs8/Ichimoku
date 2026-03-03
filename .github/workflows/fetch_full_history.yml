@@ -47,9 +47,18 @@ jobs:
           echo "$CMD"
           eval $CMD
 
+      - name: Sanitize symbol for artifact name
+        id: sanitize
+        shell: bash
+        run: |
+          SYM="${{ inputs.symbol }}"
+          # remove characters that break artifact names
+          SYM_CLEAN="${SYM//\//}"
+          SYM_CLEAN="${SYM_CLEAN//:/}"
+          echo "symbol_clean=$SYM_CLEAN" >> "$GITHUB_OUTPUT"
+
       - name: Upload cache artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cache_${{ inputs.symbol }}_${{ inputs.timeframe }}
-          path: |
-            data/cache/*
+          name: cache_${{ steps.sanitize.outputs.symbol_clean }}_${{ inputs.timeframe }}
+          path: data/cache/
