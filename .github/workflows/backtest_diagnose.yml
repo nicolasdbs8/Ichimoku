@@ -1,0 +1,55 @@
+name: Backtest Diagnose (BTC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Start ISO UTC (e.g. 2025-01-01T00:00:00Z) or empty"
+        required: false
+        default: "2025-01-01T00:00:00Z"
+      end:
+        description: "End ISO UTC (e.g. 2026-01-01T00:00:00Z) or empty"
+        required: false
+        default: "2026-01-01T00:00:00Z"
+      out:
+        description: "Output directory"
+        required: true
+        default: "data/outputs/diagnose"
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run scan_once to populate cache (ephemeral runner)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m runner.scan_once
+
+      - name: Run diagnose
+        run: |
+          CMD="python -m runner.backtest_diagnose --out '${{ inputs.out }}'"
+          if [ -n "${{ inputs.start }}" ]; then CMD="$CMD --start '${{ inputs.start }}'"; fi
+          if [ -n "${{ inputs.end }}" ]; then CMD="$CMD --end '${{ inputs.end }}'"; fi
+          echo "$CMD"
+          eval $CMD
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnose_artifacts
+          path: |
+            ${{ inputs.out }}/diagnose.json
