@@ -29,7 +29,7 @@ setup_a_plus:
 
 risk:
   atr_period: 14
-  stop_atr_mult: 0.5
+  stop_atr_mult: 1.2
 
 costs:
   fee_rate: 0.001
