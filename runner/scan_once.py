@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from datetime import datetime, timezone
+import time
 
 import yaml
 import pandas as pd
@@ -15,10 +16,12 @@ from indicators.ichimoku import ichimoku, IchimokuParams
 from signals.regime import btc_regime_on
 from signals.trend import trend_on_1h
 from signals.ichimoku_a_plus import APlusConfig, a_plus_entry_signal, a_plus_exit_signal
-from signals.dedup import DedupStateStore, in_cooldown, enter_long, exit_to_flat
 
 from runner.notify import make_telegram_client_from_env
 from notifier.templates import format_entry, format_exit
+
+# Phase 6 (SQLite)
+from storage.db import connect, init_schema, insert_signal, load_state, save_state
 
 
 def load_yaml(path: Path) -> dict:
@@ -44,9 +47,15 @@ def json_safe(obj):
 
 
 def main() -> None:
+    t0 = time.time()
+
     repo_root = Path(__file__).resolve().parents[1]
     settings = load_yaml(repo_root / "config" / "settings.yaml")
     universe = load_yaml(repo_root / "config" / "universe.yaml")
+
+    # ---- Phase 6: DB init ----
+    conn = connect(repo_root)
+    init_schema(conn)
 
     exchange_name = (settings.get("exchange") or {}).get("name", "kraken")
     enable_rl = (settings.get("exchange") or {}).get("enable_rate_limit", True)
@@ -54,7 +63,8 @@ def main() -> None:
 
     symbols = universe.get("symbols", [])
     btc_rows = [
-        s for s in symbols
+        s
+        for s in symbols
         if isinstance(s, dict) and s.get("enabled", True) and s.get("is_btc") is True
     ]
     if not btc_rows:
@@ -87,7 +97,11 @@ def main() -> None:
 
     df15 = pd.concat([cached, fetched.df], ignore_index=True)
     df15["ts"] = pd.to_datetime(df15["ts"], utc=True)
-    df15 = df15.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
+    df15 = (
+        df15.sort_values("ts")
+        .drop_duplicates(subset=["ts"], keep="last")
+        .reset_index(drop=True)
+    )
 
     # Save updated cache (note: GitHub Actions FS is ephemeral; OK for MVP)
     save_cache_csv(cpath, df15)
@@ -128,35 +142,100 @@ def main() -> None:
         min_kumo_thickness_pct=float(setup_cfg.get("min_kumo_thickness_pct", 0.0035)),
     )
 
-    signals = []
-    store = DedupStateStore()
-
+    # Current time = last closed 15m bar ts (since we only use closed bars)
     if not df15i.empty:
         now_ts = pd.to_datetime(df15i["ts"].iloc[-1], utc=True)
     else:
         now_ts = pd.Timestamp.utcnow().tz_localize("UTC")
 
-    st = store.get(btc_symbol)
+    # -----------------------
+    # Phase 6: persistent state (dedup across runs)
+    # -----------------------
+    db_state = load_state(conn, btc_symbol)
+    if db_state:
+        current_state = db_state["state"] or "FLAT"
+        cooldown_until = (
+            pd.to_datetime(db_state["cooldown_until"], utc=True)
+            if db_state.get("cooldown_until")
+            else None
+        )
+        last_exit_reason = db_state.get("last_exit_reason")
+        last_signal_ts = db_state.get("last_signal_ts")
+    else:
+        current_state = "FLAT"
+        cooldown_until = None
+        last_exit_reason = None
+        last_signal_ts = None
+
+    in_cooldown_flag = cooldown_until is not None and now_ts < cooldown_until
+
+    signals = []
 
     # EXIT check first
     exit_sig = a_plus_exit_signal(df15i)
-    if st.state == "IN_SIGNALLED_LONG" and exit_sig is not None:
-        signals.append({"symbol": btc_symbol, **exit_sig})
-        st = exit_to_flat(st)
-        store.set(btc_symbol, st)
+    if current_state == "IN_SIGNALLED_LONG" and exit_sig is not None:
+        payload = {"symbol": btc_symbol, **exit_sig}
+        signals.append(payload)
+
+        insert_signal(
+            conn,
+            ts=exit_sig["ts"],
+            symbol=btc_symbol,
+            tf=tf_signal,
+            type_="EXIT",
+            score=None,
+            reason=exit_sig.get("reason"),
+            payload=payload,
+        )
+
+        save_state(
+            conn,
+            symbol=btc_symbol,
+            state="FLAT",
+            cooldown_until=cooldown_until.isoformat() if cooldown_until else None,
+            last_signal_ts=exit_sig["ts"],
+            last_exit_reason=exit_sig.get("reason"),
+        )
+
+        current_state = "FLAT"
+        last_exit_reason = exit_sig.get("reason")
+        last_signal_ts = exit_sig["ts"]
 
     # ENTRY check
-    if st.state == "FLAT" and (not in_cooldown(st, now_ts)) and tr_on and reg_on:
+    if current_state == "FLAT" and (not in_cooldown_flag) and tr_on and reg_on:
         entry = a_plus_entry_signal(df15i, cfg)
         if entry is not None:
-            signals.append({"symbol": btc_symbol, **entry})
-            st = enter_long(
-                st,
-                now_ts,
-                cooldown_bars=int(dedup_cfg.get("cooldown_bars", 12)),
-                bar_minutes=15,
+            payload = {"symbol": btc_symbol, **entry}
+            signals.append(payload)
+
+            cooldown_bars = int(dedup_cfg.get("cooldown_bars", 12))
+            cooldown_delta = pd.Timedelta(minutes=15 * cooldown_bars)
+            new_cooldown = now_ts + cooldown_delta
+
+            insert_signal(
+                conn,
+                ts=entry["ts"],
+                symbol=btc_symbol,
+                tf=tf_signal,
+                type_="ENTRY",
+                score=entry.get("score"),
+                reason=None,
+                payload=payload,
             )
-            store.set(btc_symbol, st)
+
+            save_state(
+                conn,
+                symbol=btc_symbol,
+                state="IN_SIGNALLED_LONG",
+                cooldown_until=new_cooldown.isoformat(),
+                last_signal_ts=entry["ts"],
+                last_exit_reason=None,
+            )
+
+            current_state = "IN_SIGNALLED_LONG"
+            cooldown_until = new_cooldown
+            last_signal_ts = entry["ts"]
+            last_exit_reason = None
 
     # -----------------------
     # Phase 5: Telegram notifications (robust, non-blocking)
@@ -164,12 +243,19 @@ def main() -> None:
     tg_enabled = bool((settings.get("telegram") or {}).get("enabled", False))
     client = make_telegram_client_from_env() if tg_enabled else None
 
+    sent = 0
     if client is not None and signals:
         for s in signals:
-            if s.get("type") == "ENTRY":
-                client.send_message(format_entry(s))
-            elif s.get("type") == "EXIT":
-                client.send_message(format_exit(s))
+            try:
+                if s.get("type") == "ENTRY":
+                    ok = client.send_message(format_entry(s))
+                    sent += 1 if ok else 0
+                elif s.get("type") == "EXIT":
+                    ok = client.send_message(format_exit(s))
+                    sent += 1 if ok else 0
+            except Exception:
+                # never crash scan_once due to notifier
+                pass
 
     health = {
         "ts_utc": datetime.now(timezone.utc).isoformat(),
@@ -195,14 +281,26 @@ def main() -> None:
         },
         "gates": {"btc_regime_4h": reg_on, "trend_1h": tr_on},
         "signals": signals,
+        "state": {
+            "current_state": current_state,
+            "cooldown_until": cooldown_until.isoformat() if cooldown_until is not None else None,
+            "in_cooldown": in_cooldown_flag,
+            "last_signal_ts": last_signal_ts,
+            "last_exit_reason": last_exit_reason,
+        },
         "telegram": {
             "enabled": tg_enabled,
             "configured": client is not None,
-            "sent_messages": len(signals) if (client is not None and signals) else 0,
+            "sent_messages": sent,
+            "signals_count": len(signals),
+        },
+        "observability": {
+            "scan_latency_ms": int((time.time() - t0) * 1000),
+            "symbols_scanned": 1,
         },
         "notes": [
-            "Phase2+4+5: fetched BTC 15m, resampled 1h/4h, computed Ichimoku, gates, A+ signals, and Telegram notify (if configured).",
-            "Next: persist dedup+signals in SQLite (Phase 6) to avoid re-alerting across GitHub runs, then scan all symbols.",
+            "Phase2+4+5+6: fetched BTC 15m, resampled 1h/4h, computed Ichimoku, gates, A+ signals, Telegram notify, and persisted state/signals in SQLite.",
+            "Next: scan all symbols + persist per-symbol state + add bars_meta for data quality if needed.",
         ],
     }
 
