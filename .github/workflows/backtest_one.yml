@@ -1,187 +1,98 @@
-from __future__ import annotations
+name: Backtest One Symbol - From Fetch Run Artifact
 
-import argparse
-import json
-from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+on:
+  workflow_dispatch:
+    inputs:
+      fetch_run_id:
+        description: "Run ID of the successful Fetch Full History workflow (number)"
+        required: true
+      cache_artifact_name:
+        description: "Artifact name (e.g. cache_BTCUSDT_15m or cache_BTCUSDT_1h)"
+        required: true
+      symbol:
+        description: "Symbol (e.g. BTC/USDT)"
+        required: true
+        default: "BTC/USDT"
+      timeframe:
+        description: "Cache timeframe (e.g. 15m, 1h)"
+        required: true
+        default: "15m"
+      start:
+        description: "Start ISO UTC"
+        required: true
+        default: "2025-01-01T00:00:00Z"
+      end:
+        description: "End ISO UTC"
+        required: true
+        default: "2026-01-01T00:00:00Z"
+      out:
+        description: "Output directory"
+        required: true
+        default: "data/outputs/backtest_one"
 
-import pandas as pd
-import yaml
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
 
-from data.store import cache_path, load_cache_csv
-from indicators.ichimoku import ichimoku, IchimokuParams
-from indicators.atr import atr_wilder
-from data.resample import resample_from_15m  # we will use for 15m->1h/4h
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-from signals.regime import btc_regime_on
-from signals.trend import trend_on_1h
-from signals.ichimoku_a_plus import APlusConfig, compute_score, should_entry, should_exit
-from backtest.engine_one import run_backtest_one  # your existing engine that writes trades/summary
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
+      - name: Download cache artifact from fetch run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.fetch_run_id }}
+          name: ${{ inputs.cache_artifact_name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: _artifact
 
-def load_yaml(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict):
-        raise ValueError(f"Invalid YAML root in {path}")
-    return data
+      - name: Restore cache into repo data/cache (generic)
+        shell: bash
+        run: |
+          mkdir -p data/cache
+          echo "[restore] listing _artifact:"
+          find _artifact -maxdepth 4 -type f | head -n 50 || true
 
+          # Build expected cache filename from inputs (BTC/USDT + 1h -> BTC_USDT__1h.csv)
+          SYM="${{ inputs.symbol }}"
+          SYM_FILE="${SYM//\//_}"
+          EXPECTED="${SYM_FILE}__${{ inputs.timeframe }}.csv"
 
-def _normalize_ts(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    df = df.copy()
-    df["ts"] = pd.to_datetime(df["ts"], utc=True)
-    df = df.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
-    return df
+          SRC=$(find _artifact -type f -name "$EXPECTED" | head -n 1 || true)
+          if [ -z "$SRC" ]; then
+            echo "##ERROR## $EXPECTED not found inside artifact"
+            echo "Artifact contents:"
+            find _artifact -type f | head -n 200 || true
+            exit 1
+          fi
 
+          cp "$SRC" "data/cache/$EXPECTED"
+          echo "[restore] copied $SRC -> data/cache/$EXPECTED"
+          ls -la data/cache
 
-def _parse_iso(iso: Optional[str]) -> Optional[pd.Timestamp]:
-    if not iso:
-        return None
-    return pd.to_datetime(iso.replace("Z", "+00:00"), utc=True)
+      - name: Run backtest
+        run: |
+          python -m runner.backtest_one \
+            --symbol "${{ inputs.symbol }}" \
+            --start "${{ inputs.start }}" \
+            --end "${{ inputs.end }}" \
+            --out "${{ inputs.out }}"
 
-
-def resample_from_1h(df1h: pd.DataFrame, rule: str) -> pd.DataFrame:
-    """
-    Resample OHLCV from 1h base to higher TF (e.g. 4h) conservatively:
-    - require complete buckets (e.g. 4x 1h for 4h), otherwise drop.
-    """
-    dfi = df1h.copy()
-    dfi["ts"] = pd.to_datetime(dfi["ts"], utc=True)
-    dfi = dfi.set_index("ts").sort_index()
-
-    agg = {
-        "open": "first",
-        "high": "max",
-        "low": "min",
-        "close": "last",
-        "volume": "sum",
-    }
-
-    out = dfi.resample(rule, label="right", closed="right").agg(agg)
-    # completeness check via count of "close"
-    cnt = dfi["close"].resample(rule, label="right", closed="right").count()
-
-    # Expected bars per bucket for common rules
-    expected = None
-    if rule == "4h":
-        expected = 4
-    elif rule == "2h":
-        expected = 2
-    elif rule == "1d":
-        expected = 24
-
-    if expected is not None:
-        out = out[cnt >= expected]
-
-    out = out.dropna().reset_index()
-    out.rename(columns={"ts": "ts"}, inplace=True)
-    return out
-
-
-def build_multitf_for_backtest(df_signal: pd.DataFrame, tf_signal: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Returns (df_signal, df_trend, df_regime) where:
-      - tf_signal == 15m  -> trend=1h, regime=4h (built from 15m)
-      - tf_signal == 1h   -> trend=4h, regime=4h (built from 1h)
-    """
-    if tf_signal == "15m":
-        df15 = df_signal
-        df1h = resample_from_15m(df15, "1h")
-        df4h = resample_from_15m(df15, "4h")
-        return df15, df1h, df4h
-
-    if tf_signal == "1h":
-        df1h = df_signal
-        df4h = resample_from_1h(df1h, "4h")
-        return df1h, df4h, df4h
-
-    raise ValueError(f"Unsupported tf_signal for backtest: {tf_signal} (supported: 15m, 1h)")
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser(description="Backtest one symbol (supports --timeframe override).")
-    ap.add_argument("--symbol", required=True, help="e.g. BTC/USDT")
-    ap.add_argument("--start", default=None, help="ISO UTC start (optional)")
-    ap.add_argument("--end", default=None, help="ISO UTC end (optional)")
-    ap.add_argument("--out", default="data/outputs/backtest_one", help="Output directory")
-    ap.add_argument("--timeframe", default=None, help="Override signal timeframe (15m or 1h)")
-    args = ap.parse_args()
-
-    repo_root = Path(__file__).resolve().parents[1]
-    settings = load_yaml(repo_root / "config" / "settings.yaml")
-
-    tf_default = (settings.get("timeframes") or {}).get("signal", "15m")
-    tf_signal = (args.timeframe or tf_default).strip()
-
-    # Load cache for the selected tf_signal
-    df = load_cache_csv(cache_path(repo_root, args.symbol, tf_signal))
-    df = _normalize_ts(df)
-
-    if df.empty:
-        raise RuntimeError(
-            f"Cache is empty for {args.symbol} {tf_signal}. "
-            f"Expected file like data/cache/{args.symbol.replace('/','_')}__{tf_signal}.csv"
-        )
-
-    start_ts = _parse_iso(args.start)
-    end_ts = _parse_iso(args.end)
-    if start_ts is not None:
-        df = df[df["ts"] >= start_ts].copy()
-    if end_ts is not None:
-        df = df[df["ts"] <= end_ts].copy()
-    df = _normalize_ts(df)
-
-    if df.empty:
-        raise RuntimeError("Cache exists but is empty after start/end slicing.")
-
-    # Build multi-TF frames (trend/regime depend on tf_signal)
-    df_sig, df_trend, df_regime = build_multitf_for_backtest(df, tf_signal)
-
-    # Indicators
-    ich_cfg = settings.get("ichimoku") or {}
-    setup_cfg = settings.get("setup_a_plus") or {}
-    ich = IchimokuParams(
-        tenkan=int(ich_cfg.get("tenkan", 9)),
-        kijun=int(ich_cfg.get("kijun", 26)),
-        spanb=int(ich_cfg.get("spanb", 52)),
-        displacement=int(ich_cfg.get("displacement", 26)),
-    )
-
-    df_sig = ichimoku(df_sig, ich)
-    df_trend = ichimoku(df_trend, ich)
-    df_regime = ichimoku(df_regime, ich)
-    df_sig["atr"] = atr_wilder(df_sig, period=14)
-
-    aplus = APlusConfig(
-        score_threshold=int(setup_cfg.get("score_threshold", 80)),
-        retest_window_bars=int(setup_cfg.get("retest_window_bars", 12)),
-        retest_eps=float(setup_cfg.get("retest_eps", 0.0015)),
-        kijun_slope_bars=int(setup_cfg.get("kijun_slope_bars", 10)),
-        max_kijun_distance_pct=float(setup_cfg.get("max_kijun_distance_pct", 0.008)),
-        min_kumo_thickness_pct=float(setup_cfg.get("min_kumo_thickness_pct", 0.0035)),
-    )
-
-    # Run backtest using your existing engine. It should call should_entry/should_exit which
-    # rely on df_sig/df_trend/df_regime (now consistent for 15m or 1h runs).
-    out_dir = repo_root / args.out
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    summary = run_backtest_one(
-        symbol=args.symbol,
-        df_signal=df_sig,
-        df_trend=df_trend,
-        df_regime=df_regime,
-        aplus=aplus,
-        out_dir=out_dir,
-        fee_rate=float((settings.get("costs") or {}).get("fee_rate", 0.00075)),
-        slippage_rate=float((settings.get("costs") or {}).get("slippage_rate", 0.00075)),
-    )
-
-    # Print summary for CI logs
-    print("[backtest_one] summary=" + json.dumps(summary, ensure_ascii=False))
-
-
-if __name__ == "__main__":
-    main()
+      - name: Upload artifacts (trades + summary)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest_one_artifacts
+          path: |
+            ${{ inputs.out }}/trades.csv
+            ${{ inputs.out }}/summary.json
