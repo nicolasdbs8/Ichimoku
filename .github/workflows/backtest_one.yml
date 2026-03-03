@@ -1,0 +1,61 @@
+name: Backtest One Symbol
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Symbol (e.g. BTC/USDT)"
+        required: true
+        default: "BTC/USDT"
+      start:
+        description: "Start ISO UTC (e.g. 2025-01-01T00:00:00Z) or empty"
+        required: false
+        default: ""
+      end:
+        description: "End ISO UTC (e.g. 2026-01-01T00:00:00Z) or empty"
+        required: false
+        default: ""
+      out:
+        description: "Output directory"
+        required: true
+        default: "data/outputs/backtest_one"
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run scan_once to populate cache
+        # Important: cache in GitHub Actions is ephemeral per run, so we fetch first.
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m runner.scan_once
+
+      - name: Run backtest
+        run: |
+          CMD="python -m runner.backtest_one --symbol '${{ inputs.symbol }}' --out '${{ inputs.out }}'"
+          if [ -n "${{ inputs.start }}" ]; then CMD="$CMD --start '${{ inputs.start }}'"; fi
+          if [ -n "${{ inputs.end }}" ]; then CMD="$CMD --end '${{ inputs.end }}'"; fi
+          echo "$CMD"
+          eval $CMD
+
+      - name: Upload artifacts (trades + summary)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest_one_artifacts
+          path: |
+            ${{ inputs.out }}/trades.csv
+            ${{ inputs.out }}/summary.json
