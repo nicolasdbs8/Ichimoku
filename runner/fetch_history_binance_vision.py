@@ -14,11 +14,12 @@ BINANCE_VISION_BASE = "https://data.binance.vision"
 
 
 def month_range(start: pd.Timestamp, end: pd.Timestamp):
+    # start/end are tz-aware UTC
     cur = pd.Timestamp(start.year, start.month, 1, tz="UTC")
     endm = pd.Timestamp(end.year, end.month, 1, tz="UTC")
     while cur <= endm:
         yield cur.year, cur.month
-        cur = (cur + pd.offsets.MonthBegin(1)).tz_localize("UTC")
+        cur = cur + pd.offsets.MonthBegin(1)  # stays tz-aware UTC
 
 
 def ensure_dir(p: Path) -> None:
