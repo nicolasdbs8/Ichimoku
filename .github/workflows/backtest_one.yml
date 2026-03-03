@@ -6,6 +6,10 @@ on:
       fetch_run_id:
         description: "Run ID of the successful Fetch Full History workflow (number)"
         required: true
+      cache_artifact_name:
+        description: "Artifact name (e.g. cache_BTCUSDT_15m)"
+        required: true
+        default: "cache_BTCUSDT_15m"
       symbol:
         description: "Symbol (e.g. BTC/USDT)"
         required: true
@@ -42,16 +46,40 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Download ALL artifacts from fetch run
+      - name: Download cache artifact from fetch run
         uses: actions/download-artifact@v4
         with:
           run-id: ${{ inputs.fetch_run_id }}
+          name: ${{ inputs.cache_artifact_name }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: .
+          path: _artifact
+
+      - name: Restore cache into repo data/cache
+        shell: bash
+        run: |
+          mkdir -p data/cache
+          echo "[restore] listing _artifact:"
+          find _artifact -maxdepth 4 -type f | head -n 50 || true
+
+          SRC=$(find _artifact -type f -name "BTC_USDT__15m.csv" | head -n 1 || true)
+          if [ -z "$SRC" ]; then
+            echo "##ERROR## BTC_USDT__15m.csv not found inside artifact"
+            echo "Artifact contents:"
+            find _artifact -type f | head -n 200 || true
+            exit 1
+          fi
+
+          cp "$SRC" data/cache/BTC_USDT__15m.csv
+          echo "[restore] copied $SRC -> data/cache/BTC_USDT__15m.csv"
+          ls -la data/cache
 
       - name: Run backtest
         run: |
-          python -m runner.backtest_one --symbol "${{ inputs.symbol }}" --start "${{ inputs.start }}" --end "${{ inputs.end }}" --out "${{ inputs.out }}"
+          python -m runner.backtest_one \
+            --symbol "${{ inputs.symbol }}" \
+            --start "${{ inputs.start }}" \
+            --end "${{ inputs.end }}" \
+            --out "${{ inputs.out }}"
 
       - name: Upload artifacts (trades + summary)
         uses: actions/upload-artifact@v4
