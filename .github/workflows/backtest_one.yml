@@ -1,12 +1,11 @@
-name: Backtest One Symbol - From Cache Artifact
+name: Backtest One Symbol - From Fetch Run Artifact
 
 on:
   workflow_dispatch:
     inputs:
-      cache_artifact:
-        description: "Artifact name produced by fetch_full_history (e.g. cache_BTCUSDT_15m)"
+      fetch_run_id:
+        description: "Run ID of the successful Fetch Full History workflow (number)"
         required: true
-        default: "cache_BTCUSDT_15m"
       symbol:
         description: "Symbol (e.g. BTC/USDT)"
         required: true
@@ -27,6 +26,9 @@ on:
 jobs:
   backtest:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -40,10 +42,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Download cache artifact
+      - name: Download ALL artifacts from fetch run
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.cache_artifact }}
+          run-id: ${{ inputs.fetch_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           path: .
 
       - name: Run backtest
