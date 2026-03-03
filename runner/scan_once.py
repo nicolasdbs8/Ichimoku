@@ -17,6 +17,9 @@ from signals.trend import trend_on_1h
 from signals.ichimoku_a_plus import APlusConfig, a_plus_entry_signal, a_plus_exit_signal
 from signals.dedup import DedupStateStore, in_cooldown, enter_long, exit_to_flat
 
+from runner.notify import make_telegram_client_from_env
+from notifier.templates import format_entry, format_exit
+
 
 def load_yaml(path: Path) -> dict:
     if not path.exists():
@@ -58,6 +61,9 @@ def main() -> None:
         raise RuntimeError("No BTC symbol found in config/universe.yaml (need is_btc: true).")
     btc_symbol = btc_rows[0]["symbol"]
 
+    # -----------------------
+    # Phase 2: data fetch + cache + resample + freshness
+    # -----------------------
     ensure_cache_dir(repo_root)
     cpath = cache_path(repo_root, btc_symbol, tf_signal)
 
@@ -83,15 +89,17 @@ def main() -> None:
     df15["ts"] = pd.to_datetime(df15["ts"], utc=True)
     df15 = df15.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
 
-    # Save updated cache (note: GitHub Actions filesystem is ephemeral; OK for MVP)
+    # Save updated cache (note: GitHub Actions FS is ephemeral; OK for MVP)
     save_cache_csv(cpath, df15)
 
     miss15 = detect_missing_candles(df15, tf_signal)
 
-    # Build 1h and 4h from 15m (only complete buckets, per Phase 2 fix)
+    # Build 1h and 4h from 15m (complete buckets only)
     df15, df1h, df4h = build_multitf(df15)
 
-    # --- Phase 4: indicators + gates + signals (BTC only in scan_once MVP) ---
+    # -----------------------
+    # Phase 4: indicators + gates + signals (BTC only in scan_once MVP)
+    # -----------------------
     ich_cfg = settings.get("ichimoku") or {}
     setup_cfg = settings.get("setup_a_plus") or {}
     dedup_cfg = settings.get("dedup") or {}
@@ -130,14 +138,14 @@ def main() -> None:
 
     st = store.get(btc_symbol)
 
-    # EXIT check first (only if already in "signalled long")
+    # EXIT check first
     exit_sig = a_plus_exit_signal(df15i)
     if st.state == "IN_SIGNALLED_LONG" and exit_sig is not None:
         signals.append({"symbol": btc_symbol, **exit_sig})
         st = exit_to_flat(st)
         store.set(btc_symbol, st)
 
-    # ENTRY check (only if FLAT, not in cooldown, and gates ON)
+    # ENTRY check
     if st.state == "FLAT" and (not in_cooldown(st, now_ts)) and tr_on and reg_on:
         entry = a_plus_entry_signal(df15i, cfg)
         if entry is not None:
@@ -149,6 +157,19 @@ def main() -> None:
                 bar_minutes=15,
             )
             store.set(btc_symbol, st)
+
+    # -----------------------
+    # Phase 5: Telegram notifications (robust, non-blocking)
+    # -----------------------
+    tg_enabled = bool((settings.get("telegram") or {}).get("enabled", False))
+    client = make_telegram_client_from_env() if tg_enabled else None
+
+    if client is not None and signals:
+        for s in signals:
+            if s.get("type") == "ENTRY":
+                client.send_message(format_entry(s))
+            elif s.get("type") == "EXIT":
+                client.send_message(format_exit(s))
 
     health = {
         "ts_utc": datetime.now(timezone.utc).isoformat(),
@@ -174,9 +195,14 @@ def main() -> None:
         },
         "gates": {"btc_regime_4h": reg_on, "trend_1h": tr_on},
         "signals": signals,
+        "telegram": {
+            "enabled": tg_enabled,
+            "configured": client is not None,
+            "sent_messages": len(signals) if (client is not None and signals) else 0,
+        },
         "notes": [
-            "Phase2+4: fetched BTC 15m, resampled 1h/4h, computed Ichimoku, gates, and A+ signals (BTC only).",
-            "Next: run this over all symbols + persist dedup state in SQLite + Telegram notifier.",
+            "Phase2+4+5: fetched BTC 15m, resampled 1h/4h, computed Ichimoku, gates, A+ signals, and Telegram notify (if configured).",
+            "Next: persist dedup+signals in SQLite (Phase 6) to avoid re-alerting across GitHub runs, then scan all symbols.",
         ],
     }
 
